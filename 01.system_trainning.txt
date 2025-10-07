@@ -5,4 +5,87 @@ Chuyển về xưng hô em và sếp nhé, không xưng "bạn" nha (áp dung ch
 
 em  đọc những thông bên dưới để trả lời các câu hỏi của khách hàng của chúng tôi (Em xưng hỗ là em và sếp cho than thiện nhé) :
 
-bạn truy cập lấy thông tin ở web : www.tanphuong.vn các nội dung công khai để trả lời khách
+# scrape_tanphuong_public.py
+import requests, time, json
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse
+import pathlib
+
+BASE = "https://tanphuong.vn"
+START_PAGES = [
+    "https://tanphuong.vn/chuyen-muc/san-pham/",
+    "https://tanphuong.vn/thu-vien-anh-mau-san-pham-quan-ao-vai-da/",
+    "https://tanphuong.vn/thu-vien-anh-mau-san-pham-qua-tang/",
+    "https://tanphuong.vn/catalog-tan-phuong-2025/",
+    "https://tanphuong.vn/in-uv/",
+    "https://tanphuong.vn/in-uv-dtf/",
+    "https://tanphuong.vn/in-chuyen-nhiet-cac-san-pham-qua-tang/"
+]
+
+HEADERS = {"User-Agent": "MyScraper/1.0 (+your-email@example.com)"}
+
+def allowed_by_robots(base, path):
+    # minimal check: request robots.txt and look for disallow lines (very basic)
+    try:
+        r = requests.get(urljoin(base, "/robots.txt"), headers=HEADERS, timeout=6)
+        txt = r.text.lower()
+        if "disallow: /" in txt:
+            return False
+    except Exception:
+        pass
+    return True
+
+def get_soup(url):
+    r = requests.get(url, headers=HEADERS, timeout=8)
+    r.raise_for_status()
+    return BeautifulSoup(r.text, "html.parser")
+
+out = []
+if not allowed_by_robots(BASE, "/"):
+    raise SystemExit("Blocked by robots.txt -- do not proceed")
+
+for page in START_PAGES:
+    try:
+        soup = get_soup(page)
+        # collect article blocks / cards
+        articles = soup.select("article, .post, .item, .entry, .product")[:40]
+        if not articles:
+            # fallback: gather all links in page pointing to same domain
+            links = [a.get("href") for a in soup.find_all("a", href=True)]
+            links = [urljoin(BASE, l) for l in links if urlparse(l).netloc.endswith("tanphuong.vn")]
+            links = list(dict.fromkeys(links))[:20]
+        else:
+            links = []
+            for a in articles:
+                a_link = a.find("a", href=True)
+                if a_link:
+                    links.append(urljoin(BASE, a_link['href']))
+        for l in links:
+            try:
+                time.sleep(0.8)  # be polite
+                s = get_soup(l)
+                title = (s.select_one("h1") or s.select_one(".entry-title") or s.title).get_text(strip=True)
+                desc = (s.select_one(".entry-content") or s.select_one(".post-content") or s.select_one("article")).get_text(" ", strip=True)[:400]
+                imgs = [urljoin(l, img.get("src")) for img in s.find_all("img", src=True)]
+                item = {
+                    "id": l.split("/")[-2] or l.split("/")[-1],
+                    "title": title,
+                    "category": page.split("/")[-2],
+                    "short_description": desc,
+                    "full_text_url": l,
+                    "image_urls": imgs,
+                    "tags": [],
+                    "material": "",
+                    "technology": "",
+                    "source_page": page,
+                    "last_scraped": ""
+                }
+                out.append(item)
+            except Exception as e:
+                continue
+    except Exception as e:
+        continue
+
+p = pathlib.Path("tanphuong_public_products.json")
+p.write_text(json.dumps(out, ensure_ascii=False, indent=2))
+print("Saved", p, "items:", len(out))
